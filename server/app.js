@@ -1,0 +1,19 @@
+import 'dotenv/config'
+import express from 'express'
+import cors from 'cors'
+import { GoogleGenerativeAI } from '@google/generative-ai'
+
+const app = express(); app.use(cors()); app.use(express.json({ limit: '2mb' }))
+const roles = {
+  'Frontend Developer': ['JavaScript', 'TypeScript', 'React', 'HTML/CSS', 'Git', 'REST APIs', 'Testing'],
+  'Data Analyst': ['SQL', 'Python', 'Excel', 'Tableau', 'Statistics', 'Data Visualization', 'Communication'],
+  'Product Designer': ['Figma', 'User Research', 'Wireframing', 'Prototyping', 'Design Systems', 'UX Writing']
+}
+const ai = process.env.GEMINI_API_KEY ? new GoogleGenerativeAI(process.env.GEMINI_API_KEY).getGenerativeModel({ model: 'gemini-1.5-flash' }) : null
+async function ask(prompt, fallback) { if (!ai) return fallback; try { return (await ai.generateContent(prompt)).response.text() } catch { return fallback } }
+function json(text, fallback) { try { return JSON.parse(text.replace(/```json|```/g, '').trim()) } catch { return fallback } }
+app.post('/api/resume-check', async (req, res) => { const fallback = { score: 72, suggestions: ['Add a concise professional summary tailored to your target role.', 'Quantify outcomes with metrics (for example, “improved load time by 28%”).', 'Include a dedicated technical skills section with role-specific keywords.', 'Use consistent dates, headings, and simple single-column formatting.'] }; const text = await ask(`Act as an ATS resume reviewer. Analyze this resume against ATS parsing rules. Return ONLY JSON: {"score":number 0-100,"suggestions":[3-5 specific actionable strings]}. Resume: ${req.body.resume}`, JSON.stringify(fallback)); res.json(json(text, fallback)) })
+app.post('/api/skill-gap', (req, res) => { const { role, skills = [] } = req.body; const required = roles[role] || roles['Frontend Developer']; const normal = skills.map(s => s.toLowerCase()); res.json({ required, have: required.filter(s => normal.some(x => x.includes(s.toLowerCase()) || s.toLowerCase().includes(x))), missing: required.filter(s => !normal.some(x => x.includes(s.toLowerCase()) || s.toLowerCase().includes(x))) }) })
+app.post('/api/interview', async (req, res) => { const { role = 'Frontend Developer', answer = '', history = [] } = req.body; const defaults = ['Walk me through a project you are proud of and the impact you made.', 'How do you approach debugging a challenging problem?', 'Describe a time you received feedback and what changed afterwards.', 'How do you prioritize work when deadlines compete?', 'What would you aim to learn in your first 90 days?']; const fallback = { feedback: answer ? 'Good start. Make your answer stronger with the STAR structure: situation, task, action, and a measurable result.' : '', question: defaults[Math.min(history.length, 4)], done: history.length >= 5 }; const text = await ask(`You are a supportive ${role} interviewer. Given history ${JSON.stringify(history)} and current answer "${answer}", return ONLY JSON {"feedback":"brief specific coaching", "question":"one next interview question", "done":boolean}. Ask one question at a time; after five questions done true.`, JSON.stringify(fallback)); res.json(json(text, fallback)) })
+app.post('/api/roadmap', async (req, res) => { const { role, missing = [] } = req.body; const fallback = { weeks: missing.slice(0, 4).map((skill, i) => ({ week: i + 1, title: `Build ${skill} foundations`, tasks: [`Complete a focused ${skill} course`, `Create one small ${skill} practice project`, 'Document your learning in your portfolio'] })) }; const text = await ask(`Create a practical 4-week learning roadmap for a ${role} student with missing skills ${missing.join(', ')}. Return ONLY JSON: {"weeks":[{"week":1,"title":"...","tasks":["...","...","..."]}]}`, JSON.stringify(fallback)); res.json(json(text, fallback)) })
+export default app
